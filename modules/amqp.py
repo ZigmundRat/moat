@@ -91,7 +91,7 @@ class EventCallback(Worker):
 			_seq += 1
 			name = SName(conn.name+("f"+str(_seq),))
 		self.channel = self.parent.conn.channel()
-		self.channel.exchange_declare(exchange=self.exchange, type='topic', auto_delete=False, passive=False)
+		self.channel.exchange_declare(exchange=self.exchange, type='topic', auto_delete=False, passive=False, durable=True)
 		super(EventCallback,self).__init__(name)
 		register_worker(self, self._direct)
 	
@@ -136,8 +136,9 @@ class EventCallback(Worker):
 		# This is an event monitor. Failures will not be tolerated.
 		try:
 			msg = getattr(event.ctx,'raw',None)
+			codec = "application/binary"
 			if msg is None:
-				d = {}
+				codec = json.CODEC
 				for x,y in event.ctx:
 					if x == 'event': continue
 					if isinstance(y,six.string_types+six.integer_types+(bool,float,list,tuple)):
@@ -152,11 +153,13 @@ class EventCallback(Worker):
 					msg = json.encode(dict(data=repr(event)+"|"+repr(d)+"|"+repr(e)))
 			elif isinstance(msg,six.integer_types+(float,)):
 				msg = str(msg)
+				codec = "text/plain"
 			elif isinstance(msg,six.string_types):
 				msg = msg.encode("utf-8")
+				codec = "text/plain"
 			global _mseq
 			_mseq += 1
-			msg = amqp.Message(body=msg, content_type=json.CODEC, message_id=base_mseq+str(_mseq))
+			msg = amqp.Message(body=msg, content_type=codec, message_id=base_mseq+str(_mseq))
 			self.channel.basic_publish(msg=msg, exchange=self.exchange, routing_key=".".join(str(x) for x in self.prefix+tuple(event)[self.strip:]))
 		except Exception as ex:
 			fix_exception(ex)
@@ -585,7 +588,7 @@ class AMQPrecv(Collected):
 		super(AMQPrecv,self).__init__(name)
 
 		self.chan=conn.conn.channel()
-		self.chan.exchange_declare(exchange=parent.exchange, type='topic', auto_delete=False, passive=False)
+		self.chan.exchange_declare(exchange=parent.exchange, type='topic', auto_delete=False, passive=False, durable=True)
 		res = self.chan.queue_declare(exclusive=True)
 		self.chan.queue_bind(exchange=parent.exchange, queue=res.queue, routing_key=parent.topic)
 		self.chan.basic_consume(callback=self.on_info_msg, queue=res.queue, no_ack=True)
@@ -609,7 +612,9 @@ class AMQPrecv(Collected):
 			codec = get_codec(typ)
 			data = codec.decode(msg.body)
 		except Exception as e:
-			data = { "raw": msg.body, "content_type": typ, "error": e }
+			data = { "raw": msg.body, "content_type": typ }
+			if typ:
+				data['error'] = e
 		self.last_recv = msg.__dict__
 		if 'timestamp' not in data:
 			data['timestamp'] = now()
